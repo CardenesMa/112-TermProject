@@ -99,8 +99,8 @@
 # fftPlot(k)
 # print(k.size)
 
-# import numpy as np
-# import matplotlib.pyplot as plt
+import numpy as np
+import matplotlib.pyplot as plt
 
 # def fir_lowpass_filter(input_signal, cutoff_freq, num_taps):
 #     # Design FIR filter coefficients
@@ -144,7 +144,3 @@
 
 # plt.tight_layout()
 # plt.show()
-
-a = [1,2]
-b,v,g,h= a, a
-print(a, b,v,g,h)

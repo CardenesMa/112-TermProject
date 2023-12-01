@@ -162,14 +162,21 @@ class Oscillator(Module):
     def sinWave(self):
         #normal sin(x)*a stuff
         self.time += self.sample_size
+        self.time %= self.sample_rate
         return np.array([np.sin(i*(2*np.pi*self.getFrequency())/self.sample_rate)*self.getAmplitude() for i in range(self.time, self.time+self.sample_size)])
         
     def squareWave(self):
         # square is just the sign of the above equation
-        return np.array([np.sign(np.sin(i*(2*np.pi*self.getFrequency())/self.sample_rate))*self.getAmplitude() for i in range(self.sample_size)])
+        self.time += self.sample_size
+        self.time %= self.sample_rate
+        return np.array([np.sign(np.sin(i*(2*np.pi*self.getFrequency())/self.sample_rate))*self.getAmplitude() for i in range(self.time, self.time+ self.sample_size)])
     def sawToothWave(self):
-        #https://en.wikipedia.org/wiki/Triangle_wave
-        pass
+        #https://en.wikipedia.org/wiki/Sawtooth_wave
+        # think of it as linear from 0-amp where we just say it's t+amp/sample_size
+        self.time += self.sample_size
+        self.time %= self.sample_rate
+        return np.array([t*self.getAmplitude()/self.sample_size for t in range(self.sample_size)])
+        
     
 
     #* === Setters ===
@@ -189,7 +196,7 @@ class Oscillator(Module):
         if 0 <= index < len(self.wave_types):
             self.waveType = self.wave_types[index]
                     
-        return self.waveType
+        return index
 
     #* === Getters ===
     def getAmplitude(self):
@@ -763,16 +770,17 @@ class Knob:
 
     def turnLeft(self):
         if self.isOutput(): return
-        self.value -= self.increment
         if self.slider != None:
             self.slider.moveLeft()
+        self.value -= self.increment
         self.setValue()
 
     def turnRight(self):
         if self.isOutput(): return
-        self.value += self.increment
         if self.slider != None:
             self.slider.moveRight()
+        
+        self.value += self.increment
         self.setValue()
 
 
@@ -791,6 +799,7 @@ class Knob:
         # it is linked to, and applies
         # the value which the knob is set to
         #! Important to make sure method returns appropriate value
+
         output = self.method(np.round(self.value, 1))
         self.value=output
 
