@@ -2,7 +2,7 @@ import numpy as np
 from cmu_graphics import *
 import pyaudio as PA
 from matplotlib import pyplot as plt
-import collections
+import threading
 
 def generator(start, step):
     s = start
@@ -101,6 +101,9 @@ class Oscillator(Module):
 
         self.time = 0
 
+
+        self.lock = threading.Lock()
+
         # Put knobs in our set (from parent)
         self._attachKnobs()
 
@@ -152,18 +155,18 @@ class Oscillator(Module):
         # use a dictionary intsead of bunch of if statements
         
         wavetypedict ={
-            self.wave_types[0] : self.sinWave(),
-            self.wave_types[1] : self.squareWave(),
-            self.wave_types[2] : self.sawToothWave()
+            self.wave_types[0] : self.sinWave,
+            self.wave_types[1] : self.squareWave,
+            self.wave_types[2] : self.sawToothWave
         }
-        return wavetypedict[self.waveType]
+        return wavetypedict[self.waveType]()
         
 
     def sinWave(self):
         #normal sin(x)*a stuff
         self.time += self.sample_size
         self.time %= self.sample_rate
-        return np.array([np.sin(i*(2*np.pi*self.getFrequency())/self.sample_rate)*self.getAmplitude() for i in range(self.time, self.time+self.sample_size)])
+        return np.array([np.sin(i*((2*np.pi*self.freq)/self.sample_rate))*self.amp for i in range(self.time, self.time + self.sample_size)])
         
     def squareWave(self):
         # square is just the sign of the above equation
@@ -223,13 +226,14 @@ class Oscillator(Module):
             if 20<temp<2000:
                 self.freq = temp
                 self.original_freq = self.freq
+            return self.freq
         else:
             temp = self.freq_control[self.freq_loc]
+            if 20<temp+self.original_freq<2000:
+                self.freq = self.original_freq + temp
             self.freq_loc += 1
             self.freq_loc %= len(self.freq_control)
-            if 20<temp+self.original_freq<2000:
-                self.freq = self.original_freq * temp
-        return self.freq
+            return self.freq
 
     def isActive(self):
         return self.active
@@ -271,8 +275,9 @@ class Mixer(Module):
         
         self.isActive = True
 
-    def startThread(self):
-        self.thread.start()
+        self.temp_data = np.zeros(self.sample_size*100)
+        self.itern =0
+
 
     def hasNonZeroData(self):
         for knob in self.knobs:
@@ -298,6 +303,7 @@ class Mixer(Module):
             connection_manager.updateConnections()
             # make sure our audio cache is the correct type
             data = self.getAudioCache()
+            
                  # output it to our stream 
             self.stream.write(data.tobytes())
 
@@ -313,6 +319,14 @@ class Mixer(Module):
 
     def Input(self, input_data):
         self.audio_cache = input_data
+        self.itern += 1
+        if self.itern == 100:
+            print(self.temp_data)
+            self.temp_data.tofile("./s.txt")
+        else:
+            self.temp_data = np.roll(self.temp_data, len(input_data))
+            self.temp_data[:len(input_data)] = input_data
+
 
     def close(self):
         self.isActive=False
@@ -406,7 +420,7 @@ class Filter(Module):
         # is the values of the envelope itself at that length
         self.envelope = np.zeros(self.num_samples)
         # since we're outputting something larger than the sample size, keep track of where we are in the envelope
-        self.output_queue= collections.deque()
+        # self.output_queue= collections.deque()
 
         # now for the streams and locs of each
 

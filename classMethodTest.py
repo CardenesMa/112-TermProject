@@ -144,3 +144,7 @@ import matplotlib.pyplot as plt
 
 # plt.tight_layout()
 # plt.show()
+
+data= np.fromfile("./s.txt")
+plt.plot(data)
+plt.show()
