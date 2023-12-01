@@ -1,5 +1,7 @@
 import numpy as np 
 from snythmodules import *
+import threading
+import copy
 
 def dist(x0,y0,x1,y1):
     return ((x0-x1)**2 + (y0-y1)**2)**0.5
@@ -13,16 +15,18 @@ class Player:
         self.inAir = False
 
         # Visual Components
-        self.height = 20
-        self.width = 10
+        self.height = 50
+        self.width = 20
+        self.moving = None
+        self.isTurning = False
 
         #Connectional Attributes
         self.connector_hand = None
         self.is_carrying_connector = False
 
         #Movement Attributes
-        self.jump_height = 13
-        self.speed = 3
+        self.jump_height = 7
+        self.speed = 5
 
         #Other
         self.collisions = set()
@@ -68,8 +72,11 @@ class Player:
             return False
 
     def isTouchingKnob(self, knob):
-        knob_size = knob.jack_size
-        if dist(*self.getPlayerCenter(), *knob.pos) < knob_size:
+        k_x, k_y  = knob.pos[0], knob.pos[1]
+        # use point-in-rectangle checker
+        x,y = self.pos[0], self.pos[1]
+        w,h = self.width, self.height
+        if x < k_x < x+w and y < k_y < y + h:
             # update collisions
             self.collisions.add(knob)
             return True
@@ -104,19 +111,23 @@ class Player:
             self.vel[0] = 0
         else:
             pass
+        self.moving = None
 
     def movePlayer(self, direction, hold=False):
         if direction == "left":
             self.vel[0] = -self.speed
         elif direction == "right":
             self.vel[0] = self.speed
+
         elif direction == "up" and not hold:
             self._jump()
         elif direction == "down" and not hold:
             self._fall()
         else:
             # this is here since we can pass any direction in, not just avlid ones
-            pass
+            return
+        self.moving = direction
+        self.isTurning = False
 
     def _applyGravity(self, force = 0.01):
         if self.isInAir():
@@ -135,13 +146,29 @@ class Player:
     def turnKnob(self, direction):
         knob = self._getCollisionObjectFromType(Knob)
         if knob == None: return
-        if direction == "left":
+        if knob.isSlider(): return
+        if direction == "q":
             knob.turnLeft()
-        elif direction == "right":
+            self.con_man.updateConnections()
+        elif direction == "e":
             knob.turnRight()
+            self.con_man.updateConnections()
         else:
-            print("Invalid Knob Turning Direction")
-        
+            # similar to movement, do nothing
+            return        
+        self.isTurning = True
+
+    def moveSlider(self, direction):
+        knob = self._getCollisionObjectFromType(Knob)
+        if knob is None: return
+        if not knob.isSlider(): return
+        if direction == "e":
+            knob.turnRight()
+        elif direction == "q":
+            knob.turnLeft()
+        else:
+            pass
+        self.con_man.updateConnections()
     #* === Connection Stuff ===
     def _beginConnection(self, knob):
         temp = self.con_man.beginConnection(knob)
@@ -181,20 +208,24 @@ class Player:
     #* === Updates ===
     def updatePositions(self):
         if self.connector_hand != None:
-            self.connector_hand.carryEnd(self.pos)
+            self.connector_hand.carryEnd(self.getPlayerCenter())
 
 
         self.vel[0] += self.acc[0]
         self.vel[1] += self.acc[1]
+        
+        # Will applying my position twice double the amount of collisions possbile?
+        self.pos[0] += 0.5*(self.vel[0] + 0.5*self.acc[0])
+        self.pos[1] += 0.5*(self.vel[1] + 0.5*self.acc[1])
 
-        self.pos[0] += self.vel[0] + 0.5*self.acc[0]
-        self.pos[1] += self.vel[1] + 0.5*self.acc[1]
+
+        self._applyGravity(0.2)
+        
+        self.pos[0] += 0.5*(self.vel[0] + 0.5*self.acc[0])
+        self.pos[1] += 0.5*(self.vel[1] + 0.5*self.acc[1])
 
         self.pos[0] %= 800
         self.pos[1] %= 800
-
-        self._applyGravity(0.5)
-
 
     def updateCollisions(self, *items):
         for item in items:
@@ -208,13 +239,73 @@ class Player:
                 # see if it's in either of the jack locations
                 self.isTouchingConnector(item)
 
+    def isPlayerInBounds(self, bounds):
+        x,y,w,h = bounds
+
     #* === Visuals ===
     def Draw(self):
-        drawRect(*self.pos, self.width, self.height, fill="blue")
+        if self.vel[1]<0:
+            self._drawMovingUp()
+        elif self.moving == 'down':
+            self._drawMovingDown()
+        elif self.moving == 'left':
+            self._drawLeftMovement()
+            return
+        elif self.moving == 'right':
+            self._drawRightMovement()
+            return
+        else:
+            self._drawNotMoving()
+
+    def _drawLeftMovement(self):
+        x,y,h,w = self.pos[0], self.pos[1], self.height, self.width
+        drawCircle(x+w/2,y+h/4,h/8)#head
+        drawLine(x+w/2,y+h/4,  x+w/2,y+3*h/4)#body
+        drawLine(x+w/2,y+h/2, x,y+2*h/3)#left arm
+        drawLine(x+w/2,y+h/2, x+w, y+h/2) # right arm
+        drawLine(x+w/2,y+3*h/4,  x,y+7*h/8 )#left femur
+        drawLine(x+w/2, y+3*h/4, x+w,y+h) # right leg
+        drawLine(x,y+7*h/8,  x,y+h)# left shin
+    def _drawRightMovement(self):
+        x,y,h,w = self.pos[0], self.pos[1], self.height, self.width
+        drawCircle(x+w/2,y+h/4,h/8)#head
+        drawLine(x+w/2,y+h/4,  x+w/2,y+3*h/4)#body
+        drawLine(x+w/2,y+h/2, x,y+h/2)#left arm
+        drawLine(x+w/2,y+h/2, x+w, y+2*h/3) # right arm
+        drawLine(x+w/2,y+3*h/4,  x+w,y+7*h/8 )#right femur
+        drawLine(x+w/2, y+3*h/4, x,y+h) # left leg
+        drawLine(x+w,y+7*h/8,  x+w,y+h)# right shin
+
+    def _drawMovingUp(self):
+        x,y,h,w = self.pos[0], self.pos[1], self.height, self.width
+        drawCircle(x+w/2,y+h/4,h/8)#head
+        drawLine(x+w/2,y+h/4,  x+w/2,y+3*h/4)#body
+        drawLine(x+w/2,y+h/2, x,y+3*h/4)#left arm
+        drawLine(x+w/2,y+h/2, x+w, y+3*h/4) # right arm
+        drawLine(x+w/2,y+3*h/4,  x+2*w/3,y+4/3*h)#right leg
+        drawLine(x+w/2, y+3*h/4, x+w/3,y+4/3*h) # left leg
+        
+    def _drawMovingDown(self):
+        x,y,h,w = self.pos[0], self.pos[1], self.height, self.width
+        drawCircle(x+w/2,y+h/4,h/8)#head
+        drawLine(x+w/2,y+h/4,  x+w/2,y+3*h/4)#body
+        drawLine(x+w/2,y+h/2, x,y+h/4)#left arm
+        drawLine(x+w/2,y+h/2, x+w, y+h/4) # right arm
+        drawLine(x+w/2,y+3*h/4,  x+w,y+3*h/4)#right leg
+        drawLine(x+w/2, y+3*h/4, x,y+3*h/4) # left leg
+
+    def _drawNotMoving(self):
+        x,y,h,w = self.pos[0], self.pos[1], self.height, self.width
+        drawCircle(x+w/2,y+h/4,h/8)#head
+        drawLine(x+w/2,y+h/4,  x+w/2,y+3*h/4)#body
+        drawLine(x+w/2,y+h/2, x,y+h/2)#left arm
+        drawLine(x+w/2,y+h/2, x+w, y+h/2) # right arm
+        drawLine(x+w/2,y+3*h/4,  x,y+h )#left leg
+        drawLine(x+w/2, y+3*h/4, x+w,y+h) # right leg
 
 
 class Floor:
-    height = 10
+    height = 5
     def __init__(self, position:list, length=800):
         #Misc Attributes
         self.pos = position
@@ -227,80 +318,198 @@ class Floor:
     def Draw(self):
         drawRect(*self.pos, self.length, self.height, fill=self.color)
 
-class Visualizer:
-    def __init__(self, position = [600,0]) -> None:
-        # Visual Elements
-        self.position = position
-        self.Xs = np.linspace(0,np.pi*2, self.size[0])
-        self.size = [200, 300]
+# class TargetOutput:
+#     def __init__(self, output_audiomethod, pos = [600,0]):
+#         self.method = output_audiomethod
+#         self.pos =pos
+#         self.size= (200,100)
+#         self.duration = 1
 
-        # Amplitude target and input
-        self.target_data = np.array()
-        self.input_data = np.array((self.size[0],))
+#         self.stream = PA.PyAudio().open(
+#             44100,
+#             1,
+#             PA.paInt16,
+#             output=True,
+#             frames_per_buffer=256
+#         )
 
-    def _createTarget(self, data):
-        self.target_data = data
+#         self.audio_cache = np.array(44100*self.duration)
 
-    def inputData(self, data):
-        # we only want the first [size] samples because otherwise it would be unintelligible
-        self.input_data = data[:len(self.input_data)]
+#         self.check_values = (self.pos[0],self.pos[1], self.size[0]/2,self.size[1])
+#         self.play_values = (self.pos[0]+self.size[0]/2, self.pos[1], self.size[0]/2, self.size[1])
 
-    def Draw(self):
-        pass
+#     def play(self):
+#         while True:
+#             samples = self.audio_cache
+#             samples = np.array(samples).astype(np.int16)
+#             self.stream.write(samples.tobytes())
+
+
+
+#     def click(self, player:Player, mixer:Mixer, mixer_thread):
+#         x,y = player.pos[0],player.pos[1]
+#         cx, cy, cw, ch = self.check_values
+#         px, py, pw, ph = self.play_values
+#         if cx < x < cx+cw and cy<y<cy+ch:
+#             return self.check(mixer.input_generator)
+            
+#         elif px < x < px+pw and py<y<py+ph:
+#             mixer_thread.join()
+#             self.play()
+#             mixer_thread.start()
+#         return False
         
+#     def check(self, other):
+#         # # since we can't store both generators at the same time
+#         # # (as they are aliased and can't be copied), l ook at their respective FFTs
+#         # # Then we can determine the difference of the FFTs
+#         # N = 1024
+#         # other_transform = np.fft.fft()
+#         # answer_transform = np.fft.fft(())
+#         # xs = np.linspace(0,1,256)
+#         # plt.plot(xs, other_transform)
+#         # plt.plot(xs, answer_transform)
+        
+#         return False
+
+#     def Draw(self):
+#         cx, cy, cw, ch = self.check_values
+#         px, py, pw, ph = self.play_values
+#         drawRect(cx,cy,cw,ch, fill="red")
+#         drawRect(px,py,pw,ph, fill='green')
+
+#         drawLabel("Check", cx+cw/2,cy+ch/2)
+#         drawLabel("Play", px+pw/2, py+ph/2)
+
+#     def setData(self, data):
+#         self.audio_cache = np.roll(self.audio_cache, len(data))
+#         self.audio_cache[:len(data)] = data
 
 
 class Level:
-    def __init__(self, level_number):
-        self.level_number = level_number
-        # To be filled in by rendering 
-        self.modules = {Mixer([650,650])}
+    def __init__(self, level_number=0):
+        
+        # self.level_number = level_number
+        # mixer information
+        self.mixer = Mixer([0,0])
+        self.output_result = self.createOutput()
+        self.con_man = ConnectionManager()
+        # self.target = TargetOutput(self.output_result)
+        #CRAZY SOLUTION: pass the manager into the playsound method so that 
+        self.audioThread= threading.Thread(target=self.mixer.playSound, args=[self.con_man])
+        # To be filled in by rendering
+        self.modules = {self.mixer}
         self.floors = set()
         # Creating objects in a new level
-        self.con_man = ConnectionManager()
         self.player = Player(self.con_man)
-        self.output_result = self.createOutput()
+        self.isSolved = False
+
+        self.block_sizes = [200,300]
+        # since the player will be able to add modules there
+        self.temporary_module = None
+        self.temporary_module_loc = [0,0]
+        # we will iterate between these to choose what 
+        self.module_types = [Oscillator, LFO, Adder, LPF, Filter]
+        self.module_types_loc = 0
+        self.isPlacingModule = False
+        
 
         self.renderLevel()
 
     def renderLevel(self):
         # first add the floors as normal
         for floor_level in range(1,8):
-            floor = Floor([0,floor_level*100+10], 800)
+            length=800
+            floor = Floor([0,floor_level*100+25], length)
             self.floors.add(floor)
 
-        n = self.level_number
-        if n == 0:
-            self.modules.add(Oscillator([200,0]))
-            self.modules.add(Filter([0,0]))
-            self.modules.add(Adder([400,0]))
+        # Possibly no logner needed
+        # n = self.level_number
+        #     self.modules.add(Oscillator([200,0]))
+        #     self.modules.add(LPF([200,400]))
+        #     self.modules.add(LFO([0,200], 10))
+        
+        # Start the trhead of our audio
+        self.audioThread.start()
+
     
     def createOutput(self):
-        return
+        return self.mixer.audio_cache
     
     def Draw(self):
         for module in self.modules:
             module.Draw()
+        # also draw our temporary module if there
+        if self.temporary_module != None:
+            self.temporary_module.drawTemporary()
+        # draw all the floors on top
         for floor in self.floors:
             floor.Draw()
         
+        # then overlay the connectors
         self.con_man.Draw()
+        # self.target.Draw()
         self.player.Draw()
+
 
     def handleKeyPress(self, key):
         self.player.movePlayer(key)
+        self.player.turnKnob(key)
         self.player.handleConnectionFromKeyPress(key)
-        if key=="s":
-            self._saveData()
+
+        # if key == 'space':
+        #     if self.target.click(self.player,self.mixer, self.audioThread):
+        #         self.isSolved = True
+        self.player.moveSlider(key)
+        # if key=="s":
+        #     print("saved")
+        #     self._saveData()
+
+        # begin placing the module with a
+        if key == 'a' and not self.isPlacingModule:
+            self.isPlacingModule = True
+            self.temporary_module = self.module_types[self.module_types_loc](self.temporary_module_loc)
+            
+        # look through modules left with s
+        if key == 'q' and self.isPlacingModule:
+            t = self.module_types # for verbosity
+            self.module_types_loc -= 1
+            self.module_types_loc %= len(t)
+            l = self.module_types_loc
+            self.temporary_module = t[l](self.temporary_module_loc)
+        
+        # look through modules right with d
+        if key == 'e' and self.isPlacingModule:
+            t = self.module_types # for verbosity
+            self.module_types_loc += 1
+            self.module_types_loc %= len(t)
+            l = self.module_types_loc
+            self.temporary_module = t[l](self.temporary_module_loc)
+
+        
+        if key == 'enter' and self.isPlacingModule:
+            # we are no longer going to be placing a module
+            self.isPlacingModule = False
+            # update to make sure the loc is correct
+            self.updateTempModuleLoc()
+            # create a new module that isn't temporary
+            new_module= self.module_types[self.module_types_loc](self.temporary_module.pos)
+            # add that new module to our set
+            self.modules.add(new_module)
+            # 
+            self.temporary_module = None
+        
 
     def _saveData(self):
-        print("Data Saved (Not really, but will in the future)")
+        self.target.setData(self.createOutput())
     
     def handleKeyHold(self, key):
         self.player.movePlayer(key, hold=True)
+        self.player.turnKnob(key)
     
     def handleKeyUp(self, key):
         self.player.stopMoving(key)
+        self.player.isTurning = False
 
 
     def Update(self):
@@ -308,5 +517,29 @@ class Level:
         self.player.updateCollisions(*self.floors,
                                       *self.modules, 
                                       *self.con_man.connections)
-        self.con_man.executeConnections()
+        if self.temporary_module != None:
+            self.updateTempModuleLoc()
         
+    def updateTempModuleLoc(self):
+        # round the position of the player to the nearest block place
+        x , y = self.player.pos[0], self.player.pos[1]
+        bw,bh = self.block_sizes[0], self.block_sizes[1]
+        # want to round the module lcoation to nearest block
+        temp_pos = [int(bw*np.floor(x/bw)), int(bh*np.ceil(y/bh)-bh)]
+        # make sure it is valid
+        if self.isValidPlacingPos(temp_pos): 
+            self.temporary_module.pos = temp_pos
+    
+    def isValidPlacingPos(self, pos):
+        for module in self.modules:
+            if module.pos == pos:
+                return False
+        return True
+
+    def Close(self):
+        self.mixer.close()
+        self.audioThread.join()
+        print("Closed")
+
+    def isComplete(self):
+        return self.isSolved
