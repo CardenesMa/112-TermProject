@@ -99,6 +99,8 @@
 # fftPlot(k)
 # print(k.size)
 
+import math
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -145,6 +147,19 @@ import matplotlib.pyplot as plt
 # plt.tight_layout()
 # plt.show()
 
-data= np.fromfile("./s.txt")
-plt.plot(data)
-plt.show()
+# data= np.fromfile("./s.txt")
+# plt.plot(data)
+# plt.show()
+
+# a = np.array([np.sin(k)*100 for k in range(100)])
+# b = np.array([k/100 for k in range(100)])
+# plt.plot(a)
+# plt.plot(b*100)
+# c = a*b
+# plt.plot(c)
+# plt.show()
+t = time.time()
+for i in range(1000**2):
+    k = math.sin(math.sin(math.sin(i)))
+t2 = time.time()
+print(t, t2, t2-t)

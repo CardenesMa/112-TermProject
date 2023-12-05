@@ -1,8 +1,10 @@
+import time
 import numpy as np
 from cmu_graphics import *
 import pyaudio as PA
-from matplotlib import pyplot as plt
 import threading
+import random
+from scipy.signal import butter, filtfilt
 
 def generator(start, step):
     s = start
@@ -25,7 +27,7 @@ class Module:
         # IO information
         self.sample_rate = 44100
         self.bit_depth = np.int16
-        self.sample_size = 256
+        self.sample_size = 256*3
 
         # Audio Data 
         self.audio_cache = np.zeros((self.sample_size,))
@@ -89,11 +91,11 @@ class Oscillator(Module):
         self.amp = amplitude
         self.waveType= self.wave_types[0]
         self.active = False
-
+        self.background = rgb(190, 181, 255)
         # need to store the data which controls the amplitudes and frequencies
         self.amp_control = 0
         self.amp_loc= 0 # place in the amp control we are (if ndarray)
-        self.original_amp = self.amp # this is the origional 
+        self.original_amp = self.amp # this is the original 
         #WLOG freq
         self.freq_control =0
         self.freq_loc = 0
@@ -148,19 +150,15 @@ class Oscillator(Module):
         self.knobs.add(typeJack)
 
     def Output(self):
-        # Generator method for sin wave (other waves to come later)
-        return self.getGeneratorOutput()
-    
-    def getGeneratorOutput(self):
-        # use a dictionary intsead of bunch of if statements
-        
-        wavetypedict ={
-            self.wave_types[0] : self.sinWave,
-            self.wave_types[1] : self.squareWave,
-            self.wave_types[2] : self.sawToothWave
-        }
-        return wavetypedict[self.waveType]()
-        
+        # Get the approprite awave for the appropriate job
+        if self.waveType == self.wave_types[0]:
+            return self.sinWave()
+        elif self.waveType == self.wave_types[1]:
+            return self.squareWave()
+        elif self.waveType == self.wave_types[2]:
+            return self.sawToothWave()
+        else:
+            return np.zeros(self.sample_size)
 
     def sinWave(self):
         #normal sin(x)*a stuff
@@ -195,7 +193,7 @@ class Oscillator(Module):
         return self.freq
     
     def setWaveType(self, index):
-        # determine what kind of wave we want to outuput
+        # determine what kind of wave we want to output
         if 0 <= index < len(self.wave_types):
             self.waveType = self.wave_types[index]
                     
@@ -239,20 +237,37 @@ class Oscillator(Module):
         return self.active
     
 class LFO(Oscillator):
-    # the only real difference between and LFO and an oscillator is the 
-    def __init__(self, topleft, frequency=10, amplitude=5):
+    # the only real difference between and LFO and an oscillator is the default amplitudes and freqs
+    def __init__(self, topleft, frequency=20, amplitude=5):
         super().__init__(topleft, frequency, amplitude)
         self.title = "LFO"
-        # change the frequency knob settings
+        # change the frequency knob settings instead of re-adding them
         for knob in self.knobs:
             if knob.label == "F":
                 knob.increment = 0.1    
+            if knob.label == "A":
+                knob.increment = 0.5
     
-    def setFrequencyStream(self, amount):
-        if not isinstance(amount, (np.int64, int, float)):
-            amount= next(amount)
-        if 0 < amount < 20: self.freq = amount
+    def setFrequencyStream(self, input_stream):
+        self.freq_control = input_stream
+        self.getFrequency()
         return self.freq
+    
+    def getFrequency(self):
+        # WLOG from above
+        if not isinstance(self.freq_control, np.ndarray):
+            temp = self.freq_control
+            if 0<temp<20:
+                self.freq = temp
+                self.original_freq = self.freq
+            return self.freq
+        else:
+            temp = self.freq_control[self.freq_loc]
+            if 0<temp+self.original_freq<20:
+                self.freq = self.original_freq + temp
+            self.freq_loc += 1
+            self.freq_loc %= len(self.freq_control)
+            return self.freq
 
 class Mixer(Module):
     def __init__(self, position):
@@ -289,12 +304,15 @@ class Mixer(Module):
             [x+50, y+100],
             "In",
             self.Input,
-            False
+            False,
+            0,
+            (0,0),
+            0
         )
+        
         self.knobs.add(input_knob)
 
     def Output(self):
-        
         return
     
     def playSound(self, connection_manager):
@@ -307,21 +325,17 @@ class Mixer(Module):
                  # output it to our stream 
             self.stream.write(data.tobytes())
 
-    def outputPLT(self):
-        xs= np.linspace(0,1, len(self.audio_cache))
-        plt.plot(xs, self.audio_cache)
-        plt.show()
-
     def getAudioCache(self):
         temp = np.array(self.audio_cache).astype(np.int16)
         self.audio_cache = np.zeros(len(temp))
         return temp
 
     def Input(self, input_data):
+        if not isinstance(input_data, np.ndarray):
+            return 0
         self.audio_cache = input_data
         self.itern += 1
         if self.itern == 100:
-            print(self.temp_data)
             self.temp_data.tofile("./s.txt")
         else:
             self.temp_data = np.roll(self.temp_data, len(input_data))
@@ -340,7 +354,7 @@ class Adder(Module):
         super().__init__()
         self.pos = position
         self.title = "Adder"
-
+        self.background = rgb(255, 181, 218)
         self._attachKnobs()
         
         self.A_cache = None
@@ -379,10 +393,12 @@ class Adder(Module):
         self.knobs.add(outKnob)
 
     def In1(self, input):
-        assert(len(input) == self.sample_size)
+        if not isinstance(input, np.ndarray):
+            return 
         self.A_cache = input
     def In2(self, input):
-        assert(len(input) == self.sample_size)
+        if not isinstance(input, np.ndarray):
+            return
         self.B_cache = input
 
     def Output(self):
@@ -400,49 +416,60 @@ class Adder(Module):
 class Filter(Module):
     def __init__(self, position, 
                  attack=0.5, decay = 0.5,
-                 sustain = 0.5, release = 1,
-                 seconds = 4):
+                 sustain = 0.5, release = 1):
         super().__init__()
         self.pos = position
         self.title = "Filter"
-        self.duration = seconds
+        self.background = rgb(130, 171, 254)
 
-        # the number of samples which holds the asdr as needed
-        self.attack_samples = int(self.sample_rate * attack)
-        self.decay_samples = int(self.sample_rate * decay)
-        self.sustain_samples = int((self.duration-decay-release-attack)*self.sample_rate)
-        self.sustain_amount = sustain
-        self.release_samples = int(self.sample_rate * release)
-        # total number of samples in the filter
-        self.num_samples = self.duration*self.sample_rate
-        # this holds the actual data of inputting
-        self.audio_cache = np.zeros(self.num_samples)
-        # is the values of the envelope itself at that length
-        self.envelope = np.zeros(self.num_samples)
-        # since we're outputting something larger than the sample size, keep track of where we are in the envelope
-        # self.output_queue= collections.deque()
-
-        # now for the streams and locs of each
-
-        self.displayEnvelope = False
+        # ASDR
+        self.attack = attack
+        self.decay = decay
+        self.sustain = sustain
+        self.release= release
         
+        # since we're outputting something larger than the sample size, keep track of where we are in the envelope
+        self._setSamples()
+                
         self._attachKnobs()
         self._createEnvelope()
 
+    def _setSamples(self):
+        # This is used to update the samples and size of the filter when needed
+        self.duration = int(self.attack+self.release+self.decay)
+        # the number of samples which holds the asdr as needed
+        self.attack_samples = int(self.sample_rate * self.attack)
+        self.decay_samples = int(self.sample_rate * self.decay)
+        self.sustain_samples = int((self.duration-self.decay-self.release-self.attack)*self.sample_rate)
+        self.sustain_amount = self.sustain
+        self.release_samples = int(self.sample_rate * self.release)
+        # total number of samples in the filter
+        self.num_samples = self.duration*self.sample_rate
+        # is the values of the envelope itself at that length
+        self.envelope = np.zeros(self.num_samples)
+        self.audio_cache = np.zeros(self.num_samples)
+        self.output_samples = np.zeros(self.sample_size)
+
+
+
+
     def _createEnvelope(self):
+        self._setSamples()
         # this is used since too verbose otherwise
         Ea = self.attack_samples
         Es = self.sustain_samples
         Ed = self.decay_samples
         Er = self.release_samples
+        
         # attack
         self.envelope[:Ea] = np.linspace(0,1,Ea)
         # decay
         self.envelope[Ea:Ea+Ed] = np.linspace(1,self.sustain_amount, Ed)
         # sustain
-        self.envelope[Ea+Ed:Ea+Ed+Es] = self.sustain_amount
+        self.envelope[Ea+Ed:Ea+Ed+Es] = self.sustain
         # release
         self.envelope[-Er:]=np.linspace(self.sustain_amount,0,Er)
+        
         
 
 
@@ -513,22 +540,22 @@ class Filter(Module):
     def Output(self):
         # we can create a numpy array of samples from 0-1 and then
         # multiply the envelope
-        if self.displayEnvelope:
-            xs = np.linspace(0,len(self.envelope), len(self.envelope))
-            plt.plot(xs, self.envelope, 'r-')
-            plt.plot(xs, self.audio_cache, 'b-')
-            plt.show()
         self._applyFilter()
-        return [self.output_queue.pop() for i in range(self.sample_size)]
+        return [self.output_samples for i in range(self.sample_size)]
 
 
-    def _applyFilter(self)->np.ndarray:
-        final_signal = self.audio_cache * self.envelope
+    def _applyFilter(self):
+        final_signal = self.audio_cache* self.envelope
         # normalize it to approrpriate means
         if np.max(final_signal) == 0: return final_signal
-        final_signal /= np.max(np.abs(final_signal))
-        for i in final_signal:
-            self.output_queue.appendleft(i)
+        # if it's not zero, good to divide by max
+        # set the output samples 
+        self.output_samples = final_signal
+        # plt.plot(self.envelope, 'r-')
+        # plt.plot(self.audio_cache)
+        # plt.plot(self.envelope*self.audio_cache)
+        # plt.show()
+        return final_signal
     
 
     #* Setters
@@ -536,24 +563,30 @@ class Filter(Module):
         if not isinstance(amount, (np.int64, int, float)):
             amount = next(amount)
         self.attack = amount
+        self._createEnvelope()
         return self.attack
     
     def setDecay(self, amount):
         if not isinstance(amount, (np.int64, int, float)):
             amount = next(amount)
         self.decay = amount
+        self._createEnvelope()
         return self.decay
     
     def setSustain(self, amount):
         if not isinstance(amount, (np.int64, int, float)):
             amount = next(amount)
         self.sustain = amount
+        self._createEnvelope()
         return self.sustain
+    
     def setRelease(self, amount):
         if not isinstance(amount, (np.int64, int, float)):
             amount = next(amount)
         self.release = amount
+        self._createEnvelope()
         return self.release
+
     
 class LPF(Module):
     def __init__(self, pos):
@@ -562,10 +595,10 @@ class LPF(Module):
         self.title = "LPF"
         self.freq_control = np.zeros(self.sample_size)
         # Note: audio cache is bigger than 1 sample size because better for fft accuracy
-        self.audio_cache = np.zeros(self.sample_size*2)
+        self.audio_cache = np.zeros(self.sample_size)
+        self.background = rgb(255, 181, 181)
 
-        self.bandwidth = 100
-
+        # same stuff as above in oscillator input jack
         self.freq_loc = 0
         self.freq = 450
         self.original_freq = 0
@@ -595,6 +628,7 @@ class LPF(Module):
             self.Input,
             False
         )
+
         self.knobs.add(input_knob)
         self.knobs.add(freqKnob)
         self.knobs.add(outputJack)
@@ -604,14 +638,15 @@ class LPF(Module):
         self.getFrequency()
         return self.freq
     
+    
     def Input(self, data):
-        self.audio_cache = np.roll(self.audio_cache, len(data))
-        self.audio_cache[:len(data)] = data
+        # move the data over then add the new stuff
+        self.audio_cache = data
         
 
     def Output(self):
         self.updateCache()
-        super().Output()
+        return self.audio_cache
     
     def getFrequency(self):
         # WLOG from above
@@ -627,71 +662,118 @@ class LPF(Module):
             if 20<temp+self.original_freq<2000:
                 self.freq = self.original_freq + temp
         return self.freq
-
-    def fftPlot(self, sig, dt=1/44100, plot=True):
-        # https://stackoverflow.com/questions/25735153/plotting-a-fast-fourier-transform-in-python
-        # Here it's assumes analytic signal (real signal...) - so only half of the axis is required
-
-        if dt is None:
-            dt = 1
-            t = np.arange(0, sig.shape[-1])
-            xLabel = 'samples'
-        else:
-            t = np.arange(0, sig.shape[-1]) * dt
-            xLabel = 'freq [Hz]'
-
-        if sig.shape[0] % 2 != 0:
-            t = t[0:-1]
-            sig = sig[0:-1]
-
-        sigFFT = np.fft.fft(sig) / t.shape[0]  # Divided by size t for coherent magnitude
-
-        freq = np.fft.fftfreq(t.shape[0], d=dt)
-
-        # Plot analytic signal - right half of frequence axis needed only...
-        firstNegInd = np.argmax(freq < 0)
-        freqAxisPos = freq[0:firstNegInd]
-        sigFFTPos = 2 * sigFFT[0:firstNegInd]  # 2 because of magnitude of analytic signal
-
-        if plot:
-            plt.figure()
-            plt.plot(freqAxisPos, np.abs(sigFFTPos))
-            plt.xlabel(xLabel)
-            plt.ylabel('mag')
-            plt.xscale('log')
-            plt.title('Analytic FFT plot')
-            plt.show()
-
-        return sigFFTPos, freqAxisPos
-
-
+    
     def updateCache(self):
+        normal_cutoff = self.freq / (0.5*self.sample_rate) # nyquist! 
+        # we're keeping the order of the butter at 2 but may be nice to say 3
+        coef_a, coef_b = butter(2, normal_cutoff, 'low',False ) # get the coefficients from butter
+        self.audio_cache = filtfilt(coef_a, coef_b,self.audio_cache) # apply filter both ways
+
+
+class Randomizer(Module):
+    def __init__(self, pos, size=[200, 300], note_range = (-8,8), rate=1):
+        super().__init__(size)
+        self.title="Randomizer"
+        # Create random outputs 
+        # going to use equal temperment for ease's sake
+        self.tr2 = 2**(1/12) # twelfth root of two
+        self.range = note_range # this is the range of notes as far from A as it gets
+        self.rate = rate # since rate is in notes/second, we can get the 
+        # we default to 440
+        self.freq = 440 
+        self.background = rgb(157, 251, 164)
+        self.pos = pos
+        self.last_time = 0 # keeping track of our time for outputs
+        self._attachKnobs()
+
+    def Input(self, input_data):
+        # for now, this can't take any input
+        return 0
+    
+    def Output(self):
+        # and this only outputs integers for the sake of simplicity
+        self._updateFreq()
+        return self.freq
+
+
+    def _updateFreq(self):
+        t1 = time.time()
+        if self.rate == 0: return
+        if t1 - self.last_time >= 1/self.rate: # we want to be explicit in our timing
+            # change the note value once we've reached our increment within reasonable bounds
+            self.last_time = t1
+            freq_choice = random.randint(self.range[0], self.range[1])
+            self.freq = self._getFrequencyFromNote(freq_choice)
+        return self.freq
         
-        # self.fftPlot(self.audio_cache)
-        self.updateAudioCache()
-        # self.fftPlot(self.audio_cache)
         
 
-    def updateAudioCache(self):
-        #https://tomroelandts.com/articles/how-to-create-a-simple-low-pass-filter
-        f_c = self.getFrequency() / self.sample_rate # frequency cutoff
-        b = self.bandwidth / self.sample_rate # the width of the band
-        N = int(np.ceil(4/b))
-        if N%2 != 0: N += 1 # we want N to be odd
-        xs = np.arange(N)
-        # the sinc filter itslef
-        sinc = np.sinc(2*f_c*(xs-(N-1)/2))
-        # blackman window
-        blackman = np.blackman(N)
-        # the product of the two
-        s_b_product = sinc * blackman
-        # unity gain ( normalize )
-        unity_gain = s_b_product / np.sum(s_b_product) 
-        
-        #* apply the unity gain to the list as required
-        self.audio_cache = np.convolve(self.audio_cache, unity_gain)
-        # print(self.audio_cache)
+    def _attachKnobs(self):
+        super()._attachKnobs()
+        x,y=self.pos
+        bottomKnob = Knob(
+            [x+100,y+100],
+            "Botom",
+            self.setBottom,
+            False,
+            -8,
+            (-30,30),
+            1
+        )
+        topKnob = Knob(
+            [x+150, y+100],
+            "Top",
+            self.setTop,
+            False,
+            8,
+            (-29,31),
+            1
+        )
+        rateKnob = Knob(
+            [x+50, y+100],
+            "Rate Hz",
+            self.setRate,
+            False,
+            1,
+            (0,5),
+            0.1
+        )
+        outputJack = Knob(
+            [x+150,y+200],
+            "Out",
+            self.Output,
+            True
+        )
+        self.knobs.add(bottomKnob)
+        self.knobs.add(topKnob)
+        self.knobs.add(rateKnob)
+        self.knobs.add(outputJack)
 
+
+    def _getFrequencyFromNote(self, note):
+        # using a as relative
+        return int(self.tr2**note*440)
+    
+    def setBottom(self, stream):
+        if not isinstance(stream, np.ndarray): # onlt want to do integers for now
+            _,t = self.range
+            if stream < t:
+                self.range = (stream, t) # set the new bottom to the input
+        return self.range[0]
+    
+    def setTop(self, stream):
+        if not isinstance(stream, np.ndarray): #WLOG bottom
+            b, _ = self.range
+            if stream > b:
+                self.range = (b,stream)
+
+        return self.range[1]
+    
+    def setRate(self, stream):
+        if isinstance(stream, (float, int)):
+            if 0 <= stream <= 5:
+                self.rate = stream
+        return self.rate
 
     
     
@@ -776,26 +858,30 @@ class Knob:
                 drawRegularPolygon(*self.pos, self.knob_size, 6, fill='grey')
             else:
                 drawCircle(*self.pos, self.knob_size, fill = self.color)
-            # jack part
+                # jack part
+                # draw the value and label
+                drawLabel(str(self.value), self.pos[0], self.pos[1]-self.jack_size-10)
+            # always want the jack present
             drawCircle(*self.pos, self.jack_size, fill = 'black')
-            # draw the value and label
-            drawLabel(self.label, self.pos[0], self.pos[1]+self.jack_size+10)
-            drawLabel(str(self.value), self.pos[0], self.pos[1]-self.jack_size-10)
+            # always want the label, not always the value
+            drawLabel(self.label, self.pos[0], self.pos[1]+self.jack_size+10)   
 
     def turnLeft(self):
         if self.isOutput(): return
         if self.slider != None:
             self.slider.moveLeft()
-        self.value -= self.increment
-        self.setValue()
+        if self.val_range[0] <= self.value - self.increment <= self.val_range[1]:
+            self.value -= self.increment
+            self.setValue()
 
     def turnRight(self):
         if self.isOutput(): return
         if self.slider != None:
             self.slider.moveRight()
         
-        self.value += self.increment
-        self.setValue()
+        if self.val_range[0] <= self.value + self.increment <= self.val_range[1]:
+            self.value += self.increment
+            self.setValue()
 
 
     def isOutput(self):
@@ -841,8 +927,12 @@ class ConnectionManager:
         return False
     
     def updateConnections(self):
-        for connector in self.connections:
-            connector.executeConnection()
+        try:
+            for connector in self.connections:
+                connector.executeConnection()
+        except RuntimeError:
+            print("Size Changed")
+            
 
     def dropConnection(self):
         # make sure to set the jack as empty

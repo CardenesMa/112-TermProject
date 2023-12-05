@@ -1,7 +1,6 @@
 import numpy as np 
 from snythmodules import *
 import threading
-import copy
 
 def dist(x0,y0,x1,y1):
     return ((x0-x1)**2 + (y0-y1)**2)**0.5
@@ -318,83 +317,14 @@ class Floor:
     def Draw(self):
         drawRect(*self.pos, self.length, self.height, fill=self.color)
 
-# class TargetOutput:
-#     def __init__(self, output_audiomethod, pos = [600,0]):
-#         self.method = output_audiomethod
-#         self.pos =pos
-#         self.size= (200,100)
-#         self.duration = 1
-
-#         self.stream = PA.PyAudio().open(
-#             44100,
-#             1,
-#             PA.paInt16,
-#             output=True,
-#             frames_per_buffer=256
-#         )
-
-#         self.audio_cache = np.array(44100*self.duration)
-
-#         self.check_values = (self.pos[0],self.pos[1], self.size[0]/2,self.size[1])
-#         self.play_values = (self.pos[0]+self.size[0]/2, self.pos[1], self.size[0]/2, self.size[1])
-
-#     def play(self):
-#         while True:
-#             samples = self.audio_cache
-#             samples = np.array(samples).astype(np.int16)
-#             self.stream.write(samples.tobytes())
-
-
-
-#     def click(self, player:Player, mixer:Mixer, mixer_thread):
-#         x,y = player.pos[0],player.pos[1]
-#         cx, cy, cw, ch = self.check_values
-#         px, py, pw, ph = self.play_values
-#         if cx < x < cx+cw and cy<y<cy+ch:
-#             return self.check(mixer.input_generator)
-            
-#         elif px < x < px+pw and py<y<py+ph:
-#             mixer_thread.join()
-#             self.play()
-#             mixer_thread.start()
-#         return False
-        
-#     def check(self, other):
-#         # # since we can't store both generators at the same time
-#         # # (as they are aliased and can't be copied), l ook at their respective FFTs
-#         # # Then we can determine the difference of the FFTs
-#         # N = 1024
-#         # other_transform = np.fft.fft()
-#         # answer_transform = np.fft.fft(())
-#         # xs = np.linspace(0,1,256)
-#         # plt.plot(xs, other_transform)
-#         # plt.plot(xs, answer_transform)
-        
-#         return False
-
-#     def Draw(self):
-#         cx, cy, cw, ch = self.check_values
-#         px, py, pw, ph = self.play_values
-#         drawRect(cx,cy,cw,ch, fill="red")
-#         drawRect(px,py,pw,ph, fill='green')
-
-#         drawLabel("Check", cx+cw/2,cy+ch/2)
-#         drawLabel("Play", px+pw/2, py+ph/2)
-
-#     def setData(self, data):
-#         self.audio_cache = np.roll(self.audio_cache, len(data))
-#         self.audio_cache[:len(data)] = data
-
 
 class Level:
-    def __init__(self, level_number=0):
-        
-        # self.level_number = level_number
+    def __init__(self):
+    
         # mixer information
         self.mixer = Mixer([0,0])
         self.output_result = self.createOutput()
         self.con_man = ConnectionManager()
-        # self.target = TargetOutput(self.output_result)
         #CRAZY SOLUTION: pass the manager into the playsound method so that 
         self.audioThread= threading.Thread(target=self.mixer.playSound, args=[self.con_man])
         # To be filled in by rendering
@@ -409,7 +339,7 @@ class Level:
         self.temporary_module = None
         self.temporary_module_loc = [0,0]
         # we will iterate between these to choose what 
-        self.module_types = [Oscillator, LFO, Adder, LPF, Filter]
+        self.module_types = [Oscillator, LFO, Adder, LPF, Filter, Randomizer]
         self.module_types_loc = 0
         self.isPlacingModule = False
         
@@ -418,17 +348,10 @@ class Level:
 
     def renderLevel(self):
         # first add the floors as normal
-        for floor_level in range(1,8):
+        for floor_level in range(1,9):
             length=800
-            floor = Floor([0,floor_level*100+25], length)
+            floor = Floor([0,floor_level*100+30], length)
             self.floors.add(floor)
-
-        # Possibly no logner needed
-        # n = self.level_number
-        #     self.modules.add(Oscillator([200,0]))
-        #     self.modules.add(LPF([200,400]))
-        #     self.modules.add(LFO([0,200], 10))
-        
         # Start the trhead of our audio
         self.audioThread.start()
 
@@ -499,6 +422,22 @@ class Level:
             # 
             self.temporary_module = None
         
+        # Remove a module if you hit delete near it.
+        if key == 'backspace' and not self.isPlacingModule:
+            collided_module = self._getCollidedModule()
+            if collided_module is not None:
+                # don't want to delete the mixer if we're touching it
+                if collided_module.title != 'Mixer': 
+                    self.modules.remove(collided_module)
+
+    def _getCollidedModule(self):
+        x,y = self.player.pos
+        for m in self.modules:
+            x1,y1 = m.pos
+            w,h = m.size
+            if x1<x<x1+w and y1<y<y1+h:
+                return m
+        return None
 
     def _saveData(self):
         self.target.setData(self.createOutput())
