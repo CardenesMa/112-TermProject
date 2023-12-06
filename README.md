@@ -54,3 +54,5 @@ The envelope filter takes a signal and shapes it's amplitude. Contrary to the LP
 ## Adder 
 The adder module does exactly what it sounds like it does. It takes two signals, `a` and `b`, and adds them together, normalizing the frequency to the maximum allowed at the bit depth of the project.
 
+
+## Note: The openMixerData and s.txt are for debugging and visualizing the waveform in the mixer. If something goes wrong, let me know and use that to post a picture of the waveform! 
