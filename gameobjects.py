@@ -1,5 +1,7 @@
 import numpy as np 
-from snythmodules import *
+from SynthModules import *
+from ModuleOverlays import ConnectionManager, Connector
+from cmu_graphics import drawLine
 import threading
 
 def dist(x0,y0,x1,y1):
@@ -25,7 +27,7 @@ class Player:
 
         #Movement Attributes
         self.jump_height = 7
-        self.speed = 5
+        self.speed = 7
 
         #Other
         self.collisions = set()
@@ -339,7 +341,7 @@ class Level:
         self.temporary_module = None
         self.temporary_module_loc = [0,0]
         # we will iterate between these to choose what 
-        self.module_types = [Oscillator, LFO, Adder, LPF, Filter, Randomizer]
+        self.module_types = [Oscillator, LFO, Adder, LPF, Filter, Randomizer, Sequencer]
         self.module_types_loc = 0
         self.isPlacingModule = False
         
@@ -428,7 +430,9 @@ class Level:
             if collided_module is not None:
                 # don't want to delete the mixer if we're touching it
                 if collided_module.title != 'Mixer': 
+                    self.con_man.removeModule(collided_module)
                     self.modules.remove(collided_module)
+                    self.player.collisions = set()
 
     def _getCollidedModule(self):
         x,y = self.player.pos
@@ -439,8 +443,7 @@ class Level:
                 return m
         return None
 
-    def _saveData(self):
-        self.target.setData(self.createOutput())
+
     
     def handleKeyHold(self, key):
         self.player.movePlayer(key, hold=True)

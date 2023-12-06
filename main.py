@@ -1,11 +1,9 @@
 from cmu_graphics import *
-from gameobjects import *
+from GameObjects import Level
+import time
 
-#TODO: Make streams for automating filter envelope
-#TODO: make streams for automating randomizer
-#TODO: Make it impossible to turn input knobs
-#TODO: Envelope filter visualizer! 
-#TODO: Fix bug that keeps connectors around when modules deleted
+#TODO: Create a stepper for the sequencer.
+#TODO: Fix bugs with improper use of deleting modules
 
 # Making the splash distinct from the level object is important for clarity
 def drawSplash(app):
@@ -22,7 +20,7 @@ def drawSplash(app):
     rw,rh = 100, 150 # size of our module rect
 
     drawRect(0,0,w, h,fill=app.background_color) # background
-    drawLabel("Modular PySynthesizer", w/2, m, size = 50, bold=True) # Title
+    drawLabel("Eurorack-112", w/2, m, size = 50, bold=True) # Title
     # how to use the dials
     drawCircle(cx,cy,r, fill='red')
     drawLine(cx,cy,cx+r*(2**0.5)/2, cy-r*(2**0.5)/2, fill='white')
@@ -86,6 +84,9 @@ def onAppStart(app):
     # visual information
     app.background_color = rgb(242, 229, 215)
 
+    # for delaying key hold
+    app.last_time = time.time()
+    app.hold_gap = 0.5 # Number of seconds between key press and hold
 
 #* == View ==
 def redrawAll(app):
@@ -98,15 +99,17 @@ def redrawAll(app):
         app.level.Draw()
 
 #* == Controller ==
-def onKeyPress(app, key):     
+def onKeyPress(app, key):
+    app.last_time = time.time()
     app.level.handleKeyPress(key)
     # Remove the splash screen when 'esc' pressed
     if key == 'm':
         app.displaySplash = not app.displaySplash
 
 def onKeyHold(app, keys):
-    for key in keys:
-        app.level.handleKeyHold(key)
+    if time.time() - app.last_time > app.hold_gap:
+        for key in keys:
+            app.level.handleKeyHold(key)
 
 def onKeyRelease(app, key): 
     app.level.handleKeyUp(key)

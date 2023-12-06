@@ -1,9 +1,13 @@
-# Modular PySynthesizer
+# Eurorack-112
+Eurorack-112 is a digital modular synthesizer game that you can play with as a character in a platformer game. There's an infinite number of unique sounds you can create, so have fun exploring the world of modular synthesis. 
 
 ## Installation for Mac
 Run the following commands in the terminal: 
+
 `brew install portaudio`
+
 `pip3 install -r requirements.txt`
+
 This will install the packages required for this project.
 This assumes that pip, python, and brew are already installed on your device.  
 

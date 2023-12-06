@@ -1,19 +1,25 @@
+# keeping track of things like rate and delay
 import time
+# all arrays should be numpy for compatability sake
 import numpy as np
-from cmu_graphics import *
+from cmu_graphics import drawRect, drawLabel, drawCircle, rgb
+# For plating all the audio
 import pyaudio as PA
-import threading
+# Ranxomizer requires this
 import random
+# Used to make the low pass filter. 
 from scipy.signal import butter, filtfilt
-
-def generator(start, step):
-    s = start
-    while True:
-        yield s
-        s += step
-
+# local
+from ModuleOverlays import Knob, Slider
 
 class Module:
+    """Parent of all modules. Contains the master attributes such as size, title, 
+    and sets the idenfitication of a module. Basic functions that don't require overrides are 
+    listed here.
+
+    Returns:
+        np.ndarray: array of length <sample_size> which is the output of the internal algorithm
+    """
     ID = 0
     BorderRadius = 20
     def __init__(self, size=[200,300]):
@@ -24,10 +30,14 @@ class Module:
         self.title = "Default Module"
         self.temporary_background_color = rgb(150,150,150)
 
+        # information for y values of knobs relative to the position
+        self.knoby_top = 100
+        self.knoby_bottom = 200
+
         # IO information
         self.sample_rate = 44100
         self.bit_depth = np.int16
-        self.sample_size = 256*3
+        self.sample_size = 256
 
         # Audio Data 
         self.audio_cache = np.zeros((self.sample_size,))
@@ -43,6 +53,9 @@ class Module:
 
     # Visualization
     def Draw(self):
+        """Draws a basic rounded rectangle along with each knob in the self.knobs set. 
+        Only to be called in the View of an MVC structure.
+        """
         # background stuff
         # draw a rounded rectangle
         x,y= self.pos
@@ -67,16 +80,21 @@ class Module:
             knob.Draw()
 
     def drawTemporary(self):
+        """When choosing what module to place, this draws a preview of what you will place.
+        """
         # just draw the label and a light background, before placed
         drawRect(*self.pos, *self.size, fill = self.temporary_background_color, border="black")
         drawLabel(self.title, self.pos[0]+self.size[0]/2, self.pos[1]+10)
 
     # I/O
     def Input(self, input_data):
+        # default to saving the input data internally
         self.audio_cache = input_data
 
     def Output(self):
+        # default to outputting whatever is stored
         return self.audio_cache
+    
     
 
 
@@ -89,8 +107,9 @@ class Oscillator(Module):
         #locals
         self.freq = frequency
         self.amp = amplitude
+        # setting the wave type to sin
         self.waveType= self.wave_types[0]
-        self.active = False
+        # setting a custom background color
         self.background = rgb(190, 181, 255)
         # need to store the data which controls the amplitudes and frequencies
         self.amp_control = 0
@@ -101,11 +120,8 @@ class Oscillator(Module):
         self.freq_loc = 0
         self.original_freq = self.freq
 
+        # used for indexing when making the wave signal
         self.time = 0
-
-
-        self.lock = threading.Lock()
-
         # Put knobs in our set (from parent)
         self._attachKnobs()
 
@@ -114,7 +130,7 @@ class Oscillator(Module):
         # Create an instance of each knob that should be on the oscillator
         x, y = self.pos[0], self.pos[1]
         freqKnob = Knob(
-            [x+50,y+100], # position
+            [x+50,y+self.knoby_top], # position
             "F", # label
             self.setFrequencyStream,# callback to what you want it to change
             False, # it is not an output
@@ -123,7 +139,7 @@ class Oscillator(Module):
             2 # increment of turning
         )
         ampKnob = Knob(
-            [x+100,y+100],
+            [x+100,y+self.knoby_top],
             "A",
             self.setAmplitudeStream,
             False,
@@ -132,18 +148,19 @@ class Oscillator(Module):
             2
         )
         outputJack = Knob(
-            [x+150,y+200],
+            [x+150,y+self.knoby_bottom],
             "Out",
             self.Output,
             True
         )
         typeJack = Knob(
-            [x+50, y+200],
+            [x+50, y+self.knoby_bottom],
             "Type",
             self.setWaveType,
             False,
             slider=Slider(*self.wave_types)
         )
+        # add in-place 
         self.knobs.add(freqKnob)
         self.knobs.add(ampKnob)
         self.knobs.add(outputJack)
@@ -188,6 +205,7 @@ class Oscillator(Module):
         return self.amp
     
     def setFrequencyStream(self, input_stream):
+        # WLOG as above
         self.freq_control = input_stream
         self.getFrequency()
         return self.freq
@@ -196,7 +214,7 @@ class Oscillator(Module):
         # determine what kind of wave we want to output
         if 0 <= index < len(self.wave_types):
             self.waveType = self.wave_types[index]
-                    
+        # we return the index not the wave type-- important for sliders
         return index
 
     #* === Getters ===
@@ -232,9 +250,6 @@ class Oscillator(Module):
             self.freq_loc += 1
             self.freq_loc %= len(self.freq_control)
             return self.freq
-
-    def isActive(self):
-        return self.active
     
 class LFO(Oscillator):
     # the only real difference between and LFO and an oscillator is the default amplitudes and freqs
@@ -249,6 +264,7 @@ class LFO(Oscillator):
                 knob.increment = 0.5
     
     def setFrequencyStream(self, input_stream):
+        # see Oscillator 
         self.freq_control = input_stream
         self.getFrequency()
         return self.freq
@@ -287,9 +303,9 @@ class Mixer(Module):
             output=True,
             frames_per_buffer=self.sample_size
         )
-        
+        # used to control the audio stream
         self.isActive = True
-
+        # used for debugging wen we see 
         self.temp_data = np.zeros(self.sample_size*100)
         self.itern =0
 
@@ -301,13 +317,14 @@ class Mixer(Module):
     def _attachKnob(self):
         x,y = self.pos[0], self.pos[1]
         input_knob = Knob(
-            [x+50, y+100],
+            [x+50, y+self.knoby_top],
             "In",
             self.Input,
             False,
             0,
             (0,0),
-            0
+            0,
+            isInput= True
         )
         
         self.knobs.add(input_knob)
@@ -334,12 +351,16 @@ class Mixer(Module):
         if not isinstance(input_data, np.ndarray):
             return 0
         self.audio_cache = input_data
+
+        # In case we want to look at some of this data, we save it and open it in some other application.
         self.itern += 1
         if self.itern == 100:
             self.temp_data.tofile("./s.txt")
-        else:
-            self.temp_data = np.roll(self.temp_data, len(input_data))
-            self.temp_data[:len(input_data)] = input_data
+            self.itern =0
+            # print("Data Stored")
+        # else:
+        #     self.temp_data = np.roll(self.temp_data, len(input_data))
+        #     self.temp_data[:len(input_data)] = input_data
 
 
     def close(self):
@@ -363,26 +384,28 @@ class Adder(Module):
     def _attachKnobs(self):
         x,y = self.pos[0], self.pos[1]
         knobA = Knob(
-            [x+50,y+100],
+            [x+50,y+self.knoby_top],
             "A",
             self.In1,
             False,
             0,
             (0,0),
-            0
+            0,
+            isInput=True
         )
         knobB = Knob(
-            [x+100,y+100],
+            [x+100,y+self.knoby_top],
             "B",
             self.In2,
             False,
             0,
             (0,0),
-            0
+            0,
+            isInput=True
         )
 
         outKnob = Knob(
-            [x+160, y+200],
+            [x+160, y+self.knoby_bottom],
             "Out",
             self.Output,
             True
@@ -445,8 +468,9 @@ class Filter(Module):
         self.release_samples = int(self.sample_rate * self.release)
         # total number of samples in the filter
         self.num_samples = self.duration*self.sample_rate
-        # is the values of the envelope itself at that length
+        # is the values of the envelope itself at that length 
         self.envelope = np.zeros(self.num_samples)
+        # set the audio cache to the appropriate length
         self.audio_cache = np.zeros(self.num_samples)
         self.output_samples = np.zeros(self.sample_size)
 
@@ -476,7 +500,7 @@ class Filter(Module):
     def _attachKnobs(self):
         x,y = self.pos[0], self.pos[1]
         attKnob = Knob(
-            [x+40, y+100],
+            [x+40, y+self.knoby_top],
             "Attack",
             self.setAttack,
             False,
@@ -485,7 +509,7 @@ class Filter(Module):
             0.1
         )
         decayKnob = Knob(
-            [x+80, y+100],
+            [x+80, y+self.knoby_top],
             "Decay",
             self.setDecay,
             False,
@@ -494,7 +518,7 @@ class Filter(Module):
             0.1
         )
         sustainKnob = Knob(
-            [x+120, y+100],
+            [x+120, y+self.knoby_top],
             "Sustain",
             self.setSustain,
             False,
@@ -503,7 +527,7 @@ class Filter(Module):
             0.1
         )
         releaseKnob = Knob(
-            [x+160, y+100],
+            [x+160, y+self.knoby_top],
             "Release",
             self.setRelease,
             False,
@@ -512,16 +536,17 @@ class Filter(Module):
             0.1
         )
         outputKnob = Knob(
-            [x+160,y+200],
+            [x+160,y+self.knoby_bottom],
             "Out",
             self.Output,
             True
         )
         inKnob = Knob(
-            [x + 40, y + 200],
+            [x + 40, y + self.knoby_bottom],
             "In",
             self.Input,
-            False
+            False,
+            isInput= True
         )
         self.knobs.add(attKnob)
         self.knobs.add(decayKnob)
@@ -534,31 +559,24 @@ class Filter(Module):
     # for me to perform the 
     def Input(self, input):
         #rotate array and put input on the front
-        self.audio_cache = np.roll(self.audio_cache, len(input))
+        self.audio_cache =np.roll(self.audio_cache, len(input))
         self.audio_cache[:len(input)] = input
         
     def Output(self):
         # we can create a numpy array of samples from 0-1 and then
         # multiply the envelope
         self._applyFilter()
-        return [self.output_samples for i in range(self.sample_size)]
-
+        return self.output_samples
 
     def _applyFilter(self):
-        final_signal = self.audio_cache* self.envelope
-        # normalize it to approrpriate means
-        if np.max(final_signal) == 0: return final_signal
-        # if it's not zero, good to divide by max
-        # set the output samples 
-        self.output_samples = final_signal
-        # plt.plot(self.envelope, 'r-')
-        # plt.plot(self.audio_cache)
-        # plt.plot(self.envelope*self.audio_cache)
-        # plt.show()
-        return final_signal
+        if self.envelope.size != self.audio_cache.size: 
+            pass
+        else:
+            self.output_samples = self.envelope*self.audio_cache
     
 
     #* Setters
+    #TODO: Update to handle inputs like the other methods
     def setAttack(self, amount):
         if not isinstance(amount, (np.int64, int, float)):
             amount = next(amount)
@@ -603,12 +621,15 @@ class LPF(Module):
         self.freq = 450
         self.original_freq = 0
 
+        # must call this so that we have somewhere to store out coefficients
+        self.updateCoefficients()
+
         self._attachKnobs()
 
     def _attachKnobs(self):
         x,y=self.pos[0], self.pos[1]
         freqKnob = Knob(
-            [x+50,y+100],
+            [x+50,y+self.knoby_top],
             "F",
             self.setFrequencyStream,
             False,
@@ -617,16 +638,17 @@ class LPF(Module):
             2
         )
         outputJack = Knob(
-            [x+150,y+200],
+            [x+150,y+self.knoby_bottom],
             "Out",
             self.Output,
             True
         )
         input_knob = Knob(
-            [x+50, y+200],
+            [x+50, y+self.knoby_bottom],
             "In",
             self.Input,
-            False
+            False,
+            isInput= True
         )
 
         self.knobs.add(input_knob)
@@ -636,7 +658,13 @@ class LPF(Module):
     def setFrequencyStream(self, input_stream):
         self.freq_control = input_stream
         self.getFrequency()
+        self.updateCoefficients()
         return self.freq
+    
+    def updateCoefficients(self):
+        normal_cutoff = self.freq / (0.5*self.sample_rate) # nyquist! 
+        # we're keeping the order of the butter at 2 but may be nice to say 3
+        self.coef_a,self.coef_b = butter(3, normal_cutoff, 'low',False ) # get the coefficients from butter
     
     
     def Input(self, data):
@@ -664,10 +692,7 @@ class LPF(Module):
         return self.freq
     
     def updateCache(self):
-        normal_cutoff = self.freq / (0.5*self.sample_rate) # nyquist! 
-        # we're keeping the order of the butter at 2 but may be nice to say 3
-        coef_a, coef_b = butter(2, normal_cutoff, 'low',False ) # get the coefficients from butter
-        self.audio_cache = filtfilt(coef_a, coef_b,self.audio_cache) # apply filter both ways
+        self.audio_cache = filtfilt(self.coef_a, self.coef_b,self.audio_cache) # apply filter both ways
 
 
 class Randomizer(Module):
@@ -712,7 +737,7 @@ class Randomizer(Module):
         super()._attachKnobs()
         x,y=self.pos
         bottomKnob = Knob(
-            [x+100,y+100],
+            [x+130,y+self.knoby_top],
             "Botom",
             self.setBottom,
             False,
@@ -721,7 +746,7 @@ class Randomizer(Module):
             1
         )
         topKnob = Knob(
-            [x+150, y+100],
+            [x+80, y+self.knoby_top],
             "Top",
             self.setTop,
             False,
@@ -730,7 +755,7 @@ class Randomizer(Module):
             1
         )
         rateKnob = Knob(
-            [x+50, y+100],
+            [x+30, y+self.knoby_top],
             "Rate Hz",
             self.setRate,
             False,
@@ -739,7 +764,7 @@ class Randomizer(Module):
             0.1
         )
         outputJack = Knob(
-            [x+150,y+200],
+            [x+150,y+self.knoby_bottom],
             "Out",
             self.Output,
             True
@@ -770,256 +795,119 @@ class Randomizer(Module):
         return self.range[1]
     
     def setRate(self, stream):
-        if isinstance(stream, (float, int)):
+        if not isinstance(stream ,np.ndarray):
             if 0 <= stream <= 5:
                 self.rate = stream
         return self.rate
 
     
+class Sequencer(Randomizer): 
+    # The only real difference between a sequencer and a randomizer is the 
+    # Algorithm for generating the notes. Inherit for simplicity's sake
+    def __init__(self, pos, size=[200, 300], note_range=(-8, 8), rate=1, direction=1):
+        super().__init__(pos, size, note_range, rate)
+        self.title= "Sequencer"
+        # Direction :
+        # -1 : down, 0: up and down, 1: up
+        self.direction = direction
+        self.direction_momentum = 1 # this is for the up and down -- keeping track
+        self.note_value = 0
+        self.background = rgb(253, 174, 174)
+        # similar as goes with frequency in oscillator
+        self.step = 1
+        self.step_control = np.zeros(self.sample_size)
+        self.original_step= self.step
+        self.step_loc = 0
+
+
+    def _attachKnobs(self):
+        # want to add one more knob! 
+        super()._attachKnobs() 
+        directionSlider = Slider("U","U+D", "D")
+        x,y = self.pos
+        dKnob = Knob(
+            [x+50, y+self.knoby_bottom],
+            "",
+            self.setDirection,
+            slider = directionSlider
+        )
+        stepknob = Knob(
+            [x+180, y+self.knoby_top],
+            "Step",
+            self.setStepStream,
+            False,
+            1,
+            (1,self.range[1]-self.range[0]+1),
+            1
+        )
+        self.knobs.add(dKnob)
+        self.knobs.add(stepknob)
+
+    def setDirection(self, index):
+        # determine what kind of wave we want to output
+        if index == 0:
+            self.direction = 1
+        elif index == 1:
+            self.direction = -1
+        elif index == 2:
+            self.direction = 0
+        return index
     
+    def setStepStream(self, input_stream):
+        # see Oscillator 
+        self.step_control = input_stream
+        self.getStep()
+        return self.step
     
-
-class Slider:
-    length = 50
-    def __init__(self, *titles) -> None:
-        self.titles= titles
-        self.pos = [0,0]
-        self.selected_index = 0
-        assert(len(titles) > 1)
-        self.increment = Slider.length // (len(self.titles)-1)
-        self.circle_size = 5
-        # important so we edon't try to attach anything
-
-    def adjustBounds(self, position):
-        self.pos = position
-
-    def moveRight(self):
-        if self.selected_index < len(self.titles)-1:
-            self.selected_index += 1
-        return 1
-
-    def moveLeft(self):
-        if self.selected_index > 0:
-            self.selected_index -= 1
-        return -1
-
-    def Draw(self):
-        x,y = self.pos[0], self.pos[1]
-        x_0, x_1 = x-Slider.length/2, x+Slider.length/2
-        drawLine(x_0,y,x_1,y)
-        drawCircle(x_0+self.selected_index*self.increment, y, self.circle_size)
-        for title in range(len(self.titles)):
-            drawLabel(self.titles[title], x_0+title*self.increment, y-10)
-        
-
-
-
-class Knob:
-    
-    def __init__(self, position:list, label: str, 
-                method, output=False, initial_value = 0, 
-                value_range = (0,1), increment=1,
-                slider = None):
-        # Visual Information
-        self.pos=position
-        self.jack_size = 10 # diameter of the hole 
-        self.knob_size = 15 # diameter of the turny bit
-        self.color = rgb(67, 170, 139)
-        self.label = label
-        self.slider_length = 20
-
-        self.initial_value = initial_value
-        # Functional Information
-        self.method = method # the method which it changes
-        self.value = initial_value
-        self.val_range = value_range # know what the max and min are
-        self.increment = increment
-        self.isEmpty = True
-        self.output = output
-        self.slider = slider
-        if self.slider != None:
-            self.slider.adjustBounds(self.pos)
-            self.isEmpty = False
-        
-        # Store the previous value so we can know if it changed
-
-    def __hash__(self) -> int:
-        return hash(self.label)
-    
-    def __repr__(self) -> str:
-        return f"Knob @ {self.pos}"
-
-    def Draw(self):
-        if self.isSlider():
-            self.slider.Draw()
+    def getStep(self):
+        # WLOG from above
+        if not isinstance(self.step_control, np.ndarray):
+            temp = self.step_control
+            if 0<temp<20:
+                self.step = temp
+                self.original_step = self.step
+            return self.step
         else:
-            # outside knob bit but the hexagon if output
-            if self.isOutput():
-                drawRegularPolygon(*self.pos, self.knob_size, 6, fill='grey')
+            temp = self.step_control[self.step_loc]
+            if 0<temp+self.original_step<20:
+                self.step = self.original_step + temp
+            self.step_loc += 1
+            self.step_loc %= len(self.step_control)
+            return self.step
+
+
+    def _updateFreq(self):
+        t1 = time.time()
+        if self.rate == 0: return
+        if t1 - self.last_time >= 1/self.rate: # we want to be explicit in our timing
+            # change the note value once we've reached our increment within reasonable bounds
+            self.last_time = t1
+            if self.direction == 1: # if we're going up,
+                self.note_value += int(self.step)
+
+            elif self.direction == -1: # down
+                self.note_value -= int(self.step)
+
+            elif self.direction == 0: # up and down
+                if self.note_value >= self.range[1]:
+                    self.direction_momentum = -1
+                elif self.note_value <= self.range[0]:
+                    self.direction_momentum = 1
+                # once we get the momentum (up or down) we apply it to step and go that way
+                self.note_value += self.direction_momentum * int(self.step)
+                
+                
             else:
-                drawCircle(*self.pos, self.knob_size, fill = self.color)
-                # jack part
-                # draw the value and label
-                drawLabel(str(self.value), self.pos[0], self.pos[1]-self.jack_size-10)
-            # always want the jack present
-            drawCircle(*self.pos, self.jack_size, fill = 'black')
-            # always want the label, not always the value
-            drawLabel(self.label, self.pos[0], self.pos[1]+self.jack_size+10)   
-
-    def turnLeft(self):
-        if self.isOutput(): return
-        if self.slider != None:
-            self.slider.moveLeft()
-        if self.val_range[0] <= self.value - self.increment <= self.val_range[1]:
-            self.value -= self.increment
-            self.setValue()
-
-    def turnRight(self):
-        if self.isOutput(): return
-        if self.slider != None:
-            self.slider.moveRight()
-        
-        if self.val_range[0] <= self.value + self.increment <= self.val_range[1]:
-            self.value += self.increment
-            self.setValue()
-
-
-    def isOutput(self):
-        return self.output
-
-    def isSlider(self):
-        return self.slider != None
-    
-
-    def getValue(self):
-        return self.value
-
-    def setValue(self):
-        # this calls the method which 
-        # it is linked to, and applies
-        # the value which the knob is set to
-        #! Important to make sure method returns appropriate value
-
-        output = self.method(np.round(self.value, 1))
-        self.value=output
-
-    def connectorRemoved(self):
-        self.value = self.initial_value
-        self.isEmpty = True
-
-class ConnectionManager:
-    def __init__(self):
-        self.connections : set[Connector] = set()
-        self.temporary_connector = None
-        
-    def severConnection(self, connector):
-        connector.deconstructConnector()
-        self.connections.remove(connector)
-        self.updateConnections()
-
-    def placeConnection(self, end_knob:Knob):
-        # make the jacks know they're full
-        if self.temporary_connector.completePlacement(end_knob):
-            self.temporary_connector.executeConnection()
-            self.connections.add(self.temporary_connector)
-            self.temporary_connector = None
-            return True
-        return False
-    
-    def updateConnections(self):
-        try:
-            for connector in self.connections:
-                connector.executeConnection()
-        except RuntimeError:
-            print("Size Changed")
+                print("invalid direction")
+            # Wrap around the frequency (modulo more complitated in this case)
+            if self.direction == 1 or self.direction == -1:
+                if self.note_value > self.range[1]:
+                    self.note_value = self.range[0]
+                if self.note_value < self.range[0]:
+                    self.note_value = self.range[1]
             
+            
+            # return the outputting frequency
+            self.freq = self._getFrequencyFromNote(self.note_value)
+        return self.freq  
 
-    def dropConnection(self):
-        # make sure to set the jack as empty
-        self.temporary_connector.start_jack.isEmpty = True
-        # remove the connector
-        self.temporary_connector = None
-
-    # for the initial string-up, creating a new connection
-    def beginConnection(self, knob:Knob):
-        # handle to make sure it's a valid knob
-        if knob.isEmpty:
-            self.temporary_connector = Connector(knob)
-            return self.temporary_connector
-        else: return None
-
-    def Draw(self):
-        for connection in self.connections:
-            connection.Draw()
-        if self.temporary_connector is not None:
-            self.temporary_connector.Draw()
-
-
-
-class Connector:
-    ID = 0
-    def __init__(self, start_jack:Knob):
-        start_jack.isEmpty = False
-        self.start_jack = start_jack
-        self.to_jack = Knob([0,0], "Default", None)
-
-        self.inMethod = self.start_jack.method
-        self.outMethod = None
-
-        # visual information
-        self.color = "orange"
-        self.loc1 = self.start_jack.pos
-        self.loc2 = [0,0]
-        self.id = Connector.ID
-        Connector.ID += 1
-
-    def __hash__(self) -> int:
-        return hash(str(self.id))
-    
-    def __repr__(self) -> str:
-        return f"Connector with ID {self.id}"
-
-    def carryEnd(self, location:list):
-        self.loc2 = location
-
-    def getMethods(self):
-        if self.start_jack.isOutput():
-            outJack = self.start_jack.method
-            inJack = self.to_jack.method
-        else:
-            outJack = self.to_jack.method
-            inJack = self.start_jack.method
-        return (inJack, outJack)
-
-    def completePlacement(self, end_jack:Knob):
-        if not end_jack.isEmpty: return False
-        # also, make sure we're connecting 
-        # strictly inputs to outputs
-        start_type = self.start_jack.isOutput()
-        end_type = end_jack.isOutput()
-        if start_type == end_type: return
-        # we also want to make sure they belong to different objects
-
-        # set the jack to being full
-        end_jack.isEmpty = False
-        # update where it is plugged in
-        self.to_jack = end_jack
-        self.outMethod = self.to_jack.method
-        self.loc2 = self.to_jack.pos
-        # know that the connector is placed successfully
-        self.color = "green"
-        return True
-
-    def deconstructConnector(self):
-        self.start_jack.connectorRemoved()
-        self.to_jack.connectorRemoved()
-
-    def executeConnection(self):
-        inMethod, outMethod = self.getMethods()
-        inMethod(outMethod())
-
-    def Draw(self):
-        # for now just a simple straight line
-        drawCircle(*self.loc1, 10, fill=self.color)
-        drawCircle(*self.loc2, 10, fill=self.color)
-        drawLine(*self.loc1, *self.loc2, fill=self.color)
